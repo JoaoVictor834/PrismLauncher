@@ -83,8 +83,6 @@ MinecraftAccountPtr MinecraftAccount::createOffline(const QString& username)
     account->data.yggdrasilToken.issueInstant = QDateTime::currentDateTimeUtc();
     account->data.yggdrasilToken.extra["userName"] = username;
     account->data.yggdrasilToken.extra["clientToken"] = QUuid::createUuid().toString().remove(QRegularExpression("[{}-]"));
-    account->data.minecraftEntitlement.ownsMinecraft = true;
-    account->data.minecraftEntitlement.canPlayMinecraft = true;
     account->data.minecraftProfile.id = uuidFromUsername(username).toString().remove(QRegularExpression("[{}-]"));
     account->data.minecraftProfile.name = username;
     account->data.minecraftProfile.validity = Validity::Certain;
@@ -123,7 +121,7 @@ shared_qobject_ptr<AuthFlow> MinecraftAccount::login(bool useDeviceCode)
 {
     Q_ASSERT(m_currentTask.get() == nullptr);
 
-    m_currentTask.reset(new AuthFlow(&data, useDeviceCode ? AuthFlow::Action::DeviceCode : AuthFlow::Action::Login, this));
+    m_currentTask.reset(new AuthFlow(&data, useDeviceCode ? AuthFlow::Action::DeviceCode : AuthFlow::Action::Login));
     connect(m_currentTask.get(), &Task::succeeded, this, &MinecraftAccount::authSucceeded);
     connect(m_currentTask.get(), &Task::failed, this, &MinecraftAccount::authFailed);
     connect(m_currentTask.get(), &Task::aborted, this, [this] { authFailed(tr("Aborted")); });
@@ -137,7 +135,7 @@ shared_qobject_ptr<AuthFlow> MinecraftAccount::refresh()
         return m_currentTask;
     }
 
-    m_currentTask.reset(new AuthFlow(&data, AuthFlow::Action::Refresh, this));
+    m_currentTask.reset(new AuthFlow(&data, AuthFlow::Action::Refresh));
 
     connect(m_currentTask.get(), &Task::succeeded, this, &MinecraftAccount::authSucceeded);
     connect(m_currentTask.get(), &Task::failed, this, &MinecraftAccount::authFailed);
@@ -253,6 +251,8 @@ void MinecraftAccount::fillSession(AuthSessionPtr session)
     session->player_name = data.profileName();
     // profile ID
     session->uuid = data.profileId();
+    if (session->uuid.isEmpty())
+        session->uuid = uuidFromUsername(session->player_name).toString().remove(QRegularExpression("[{}-]"));
     // 'legacy' or 'mojang', depending on account type
     session->user_type = typeString();
     if (!session->access_token.isEmpty()) {

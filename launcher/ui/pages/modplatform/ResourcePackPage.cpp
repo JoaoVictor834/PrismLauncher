@@ -15,7 +15,6 @@ namespace ResourceDownload {
 
 ResourcePackResourcePage::ResourcePackResourcePage(ResourceDownloadDialog* dialog, BaseInstance& instance) : ResourcePage(dialog, instance)
 {
-    connect(m_ui->searchButton, &QPushButton::clicked, this, &ResourcePackResourcePage::triggerSearch);
     connect(m_ui->packView, &QListView::doubleClicked, this, &ResourcePackResourcePage::onResourceSelected);
 }
 
@@ -31,7 +30,7 @@ void ResourcePackResourcePage::triggerSearch()
     updateSelectionButton();
 
     static_cast<ResourcePackResourceModel*>(m_model)->searchWithTerm(getSearchTerm(), m_ui->sortByBox->currentData().toUInt());
-    m_fetch_progress.watch(m_model->activeSearchJob().get());
+    m_fetchProgress.watch(m_model->activeSearchJob().get());
 }
 
 QMap<QString, QString> ResourcePackResourcePage::urlHandlers() const

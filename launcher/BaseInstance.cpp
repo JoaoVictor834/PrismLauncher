@@ -269,13 +269,18 @@ void BaseInstance::setRunning(bool running)
 
     m_isRunning = running;
 
-    if (!m_settings->get("RecordGameTime").toBool()) {
-        emit runningStatusChanged(running);
+    emit runningStatusChanged(running);
+}
+
+void BaseInstance::setMinecraftRunning(bool running)
+{
+    if (!settings()->get("RecordGameTime").toBool()) {
         return;
     }
 
     if (running) {
         m_timeStarted = QDateTime::currentDateTime();
+        setLastLaunch(m_timeStarted.toMSecsSinceEpoch());
     } else {
         QDateTime timeEnded = QDateTime::currentDateTime();
 
@@ -285,8 +290,6 @@ void BaseInstance::setRunning(bool running)
 
         emit propertiesChanged(this);
     }
-
-    emit runningStatusChanged(running);
 }
 
 int64_t BaseInstance::totalTimePlayed() const
@@ -407,4 +410,9 @@ shared_qobject_ptr<LaunchTask> BaseInstance::getLaunchTask()
 void BaseInstance::updateRuntimeContext()
 {
     // NOOP
+}
+
+bool BaseInstance::isLegacy()
+{
+    return traits().contains("legacyLaunch") || traits().contains("alphaLaunch");
 }

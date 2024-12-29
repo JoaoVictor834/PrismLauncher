@@ -40,12 +40,14 @@
 
 #include "Application.h"
 #include "Json.h"
-#include "net/StaticHeaderProxy.h"
+#include "net/RawHeaderProxy.h"
 
 // https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code
 MSADeviceCodeStep::MSADeviceCodeStep(AccountData* data) : AuthStep(data)
 {
     m_clientId = APPLICATION->getMSAClientID();
+    connect(&m_expiration_timer, &QTimer::timeout, this, &MSADeviceCodeStep::abort);
+    connect(&m_pool_timer, &QTimer::timeout, this, &MSADeviceCodeStep::authenticateUser);
 }
 
 QString MSADeviceCodeStep::describe()
@@ -65,16 +67,19 @@ void MSADeviceCodeStep::perform()
         { "Accept", "application/json" },
     };
     m_response.reset(new QByteArray());
-    m_task = Net::Upload::makeByteArray(url, m_response, payload);
-    m_task->addHeaderProxy(new Net::StaticHeaderProxy(headers));
+    m_request = Net::Upload::makeByteArray(url, m_response, payload);
+    m_request->addHeaderProxy(new Net::RawHeaderProxy(headers));
 
-    connect(m_task.get(), &Task::finished, this, &MSADeviceCodeStep::deviceAutorizationFinished);
+    m_task.reset(new NetJob("MSADeviceCodeStep", APPLICATION->network()));
+    m_task->setAskRetry(false);
+    m_task->addNetAction(m_request);
 
-    m_task->setNetwork(APPLICATION->network());
+    connect(m_task.get(), &Task::finished, this, &MSADeviceCodeStep::deviceAuthorizationFinished);
+
     m_task->start();
 }
 
-struct DeviceAutorizationResponse {
+struct DeviceAuthorizationResponse {
     QString device_code;
     QString user_code;
     QString verification_uri;
@@ -85,17 +90,17 @@ struct DeviceAutorizationResponse {
     QString error_description;
 };
 
-DeviceAutorizationResponse parseDeviceAutorizationResponse(const QByteArray& data)
+DeviceAuthorizationResponse parseDeviceAuthorizationResponse(const QByteArray& data)
 {
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(data, &err);
     if (err.error != QJsonParseError::NoError) {
-        qWarning() << "Failed to parse device autorization response due to err:" << err.errorString();
+        qWarning() << "Failed to parse device authorization response due to err:" << err.errorString();
         return {};
     }
 
     if (!doc.isObject()) {
-        qWarning() << "Device autorization response is not an object";
+        qWarning() << "Device authorization response is not an object";
         return {};
     }
     auto obj = doc.object();
@@ -106,16 +111,16 @@ DeviceAutorizationResponse parseDeviceAutorizationResponse(const QByteArray& dat
     };
 }
 
-void MSADeviceCodeStep::deviceAutorizationFinished()
+void MSADeviceCodeStep::deviceAuthorizationFinished()
 {
-    auto rsp = parseDeviceAutorizationResponse(*m_response);
+    auto rsp = parseDeviceAuthorizationResponse(*m_response);
     if (!rsp.error.isEmpty() || !rsp.error_description.isEmpty()) {
         qWarning() << "Device authorization failed:" << rsp.error;
         emit finished(AccountTaskState::STATE_FAILED_HARD,
                       tr("Device authorization failed: %1").arg(rsp.error_description.isEmpty() ? rsp.error : rsp.error_description));
         return;
     }
-    if (!m_task->wasSuccessful() || m_task->error() != QNetworkReply::NoError) {
+    if (!m_request->wasSuccessful() || m_request->error() != QNetworkReply::NoError) {
         emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Failed to retrieve device authorization"));
         qDebug() << *m_response;
         return;
@@ -133,9 +138,7 @@ void MSADeviceCodeStep::deviceAutorizationFinished()
     m_expiration_timer.setTimerType(Qt::VeryCoarseTimer);
     m_expiration_timer.setInterval(rsp.expires_in * 1000);
     m_expiration_timer.setSingleShot(true);
-    connect(&m_expiration_timer, &QTimer::timeout, this, &MSADeviceCodeStep::abort);
     m_expiration_timer.start();
-
     m_pool_timer.setTimerType(Qt::VeryCoarseTimer);
     m_pool_timer.setSingleShot(true);
     startPoolTimer();
@@ -145,8 +148,8 @@ void MSADeviceCodeStep::abort()
 {
     m_expiration_timer.stop();
     m_pool_timer.stop();
-    if (m_task) {
-        m_task->abort();
+    if (m_request) {
+        m_request->abort();
     }
     m_is_aborted = true;
     emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Task aborted"));
@@ -157,8 +160,12 @@ void MSADeviceCodeStep::startPoolTimer()
     if (m_is_aborted) {
         return;
     }
+    if (m_expiration_timer.remainingTime() < interval * 1000) {
+        perform();
+        return;
+    }
+
     m_pool_timer.setInterval(interval * 1000);
-    connect(&m_pool_timer, &QTimer::timeout, this, &MSADeviceCodeStep::authenticateUser);
     m_pool_timer.start();
 }
 
@@ -175,13 +182,13 @@ void MSADeviceCodeStep::authenticateUser()
         { "Accept", "application/json" },
     };
     m_response.reset(new QByteArray());
-    m_task = Net::Upload::makeByteArray(url, m_response, payload);
-    m_task->addHeaderProxy(new Net::StaticHeaderProxy(headers));
+    m_request = Net::Upload::makeByteArray(url, m_response, payload);
+    m_request->addHeaderProxy(new Net::RawHeaderProxy(headers));
 
-    connect(m_task.get(), &Task::finished, this, &MSADeviceCodeStep::authenticationFinished);
+    connect(m_request.get(), &Task::finished, this, &MSADeviceCodeStep::authenticationFinished);
 
-    m_task->setNetwork(APPLICATION->network());
-    m_task->start();
+    m_request->setNetwork(APPLICATION->network());
+    m_request->start();
 }
 
 struct AuthenticationResponse {
@@ -201,12 +208,12 @@ AuthenticationResponse parseAuthenticationResponse(const QByteArray& data)
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(data, &err);
     if (err.error != QJsonParseError::NoError) {
-        qWarning() << "Failed to parse device autorization response due to err:" << err.errorString();
+        qWarning() << "Failed to parse device authorization response due to err:" << err.errorString();
         return {};
     }
 
     if (!doc.isObject()) {
-        qWarning() << "Device autorization response is not an object";
+        qWarning() << "Device authorization response is not an object";
         return {};
     }
     auto obj = doc.object();
@@ -221,7 +228,7 @@ AuthenticationResponse parseAuthenticationResponse(const QByteArray& data)
 
 void MSADeviceCodeStep::authenticationFinished()
 {
-    if (m_task->error() == QNetworkReply::TimeoutError) {
+    if (m_request->error() == QNetworkReply::TimeoutError) {
         // rfc8628#section-3.5
         // "On encountering a connection timeout, clients MUST unilaterally
         // reduce their polling frequency before retrying.  The use of an
@@ -254,7 +261,7 @@ void MSADeviceCodeStep::authenticationFinished()
                       tr("Device Access failed: %1").arg(rsp.error_description.isEmpty() ? rsp.error : rsp.error_description));
         return;
     }
-    if (!m_task->wasSuccessful() || m_task->error() != QNetworkReply::NoError) {
+    if (!m_request->wasSuccessful() || m_request->error() != QNetworkReply::NoError) {
         startPoolTimer();  // it failed so just try again without increasing the interval
         return;
     }

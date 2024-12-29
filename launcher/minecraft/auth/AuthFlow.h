@@ -17,12 +17,15 @@ class AuthFlow : public Task {
    public:
     enum class Action { Refresh, Login, DeviceCode };
 
-    explicit AuthFlow(AccountData* data, Action action = Action::Refresh, QObject* parent = 0);
+    explicit AuthFlow(AccountData* data, Action action = Action::Refresh);
     virtual ~AuthFlow() = default;
 
     void executeTask() override;
 
     AccountTaskState taskState() { return m_taskState; }
+
+   public slots:
+    bool abort() override;
 
    signals:
     void authorizeWithBrowser(const QUrl& url);

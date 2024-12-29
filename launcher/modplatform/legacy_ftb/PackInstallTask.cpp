@@ -137,8 +137,8 @@ void PackInstallTask::install()
     QDir unzipMcDir(m_stagingPath + "/unzip/minecraft");
     if (unzipMcDir.exists()) {
         // ok, found minecraft dir, move contents to instance dir
-        if (!QDir().rename(m_stagingPath + "/unzip/minecraft", m_stagingPath + "/minecraft")) {
-            emitFailed(tr("Failed to move unzipped Minecraft!"));
+        if (!FS::move(m_stagingPath + "/unzip/minecraft", m_stagingPath + "/minecraft")) {
+            emitFailed(tr("Failed to move unpacked Minecraft!"));
             return;
         }
     }

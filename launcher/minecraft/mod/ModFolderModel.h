@@ -3,6 +3,7 @@
  *  Prism Launcher - Minecraft Launcher
  *  Copyright (c) 2022 flowln <flowlnlnln@gmail.com>
  *  Copyright (C) 2022 Sefa Eyeoglu <contact@scrumplex.net>
+ *  Copyright (c) 2023 Trial97 <alexandru.tripon97@gmail.com>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -46,11 +47,6 @@
 #include "Mod.h"
 #include "ResourceFolderModel.h"
 
-#include "minecraft/mod/tasks/LocalModParseTask.h"
-#include "minecraft/mod/tasks/ModFolderLoadTask.h"
-#include "modplatform/ModIndex.h"
-
-class LegacyInstance;
 class BaseInstance;
 class QFileSystemWatcher;
 
@@ -61,9 +57,21 @@ class QFileSystemWatcher;
 class ModFolderModel : public ResourceFolderModel {
     Q_OBJECT
    public:
-    enum Columns { ActiveColumn = 0, ImageColumn, NameColumn, VersionColumn, DateColumn, ProviderColumn, NUM_COLUMNS };
-    enum ModStatusAction { Disable, Enable, Toggle };
-    ModFolderModel(const QString& dir, BaseInstance* instance, bool is_indexed = false, bool create_dir = true);
+    enum Columns {
+        ActiveColumn = 0,
+        ImageColumn,
+        NameColumn,
+        VersionColumn,
+        DateColumn,
+        ProviderColumn,
+        SizeColumn,
+        SideColumn,
+        LoadersColumn,
+        McVersionsColumn,
+        ReleaseTypeColumn,
+        NUM_COLUMNS
+    };
+    ModFolderModel(const QDir& dir, BaseInstance* instance, bool is_indexed, bool create_dir, QObject* parent = nullptr);
 
     virtual QString id() const override { return "mods"; }
 
@@ -72,34 +80,13 @@ class ModFolderModel : public ResourceFolderModel {
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
     int columnCount(const QModelIndex& parent) const override;
 
-    [[nodiscard]] Task* createUpdateTask() override;
+    [[nodiscard]] Resource* createResource(const QFileInfo& file) override { return new Mod(file); }
     [[nodiscard]] Task* createParseTask(Resource&) override;
 
-    bool installMod(QString file_path) { return ResourceFolderModel::installResource(file_path); }
-    bool installMod(QString file_path, ModPlatform::IndexedVersion& vers);
-    bool uninstallMod(const QString& filename, bool preserve_metadata = false);
-
-    /// Deletes all the selected mods
-    bool deleteMods(const QModelIndexList& indexes);
-    bool deleteModsMetadata(const QModelIndexList& indexes);
-
     bool isValid();
-
-    bool startWatching() override;
-    bool stopWatching() override;
-
-    QDir indexDir() { return { QString("%1/.index").arg(dir().absolutePath()) }; }
-
-    auto selectedMods(QModelIndexList& indexes) -> QList<Mod*>;
-    auto allMods() -> QList<Mod*>;
 
     RESOURCE_HELPERS(Mod)
 
    private slots:
-    void onUpdateSucceeded() override;
     void onParseSucceeded(int ticket, QString resource_id) override;
-
-   protected:
-    bool m_is_indexed;
-    bool m_first_folder_load = true;
 };

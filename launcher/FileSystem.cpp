@@ -45,7 +45,6 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QSaveFile>
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QTextStream>
@@ -54,6 +53,7 @@
 #include <system_error>
 
 #include "DesktopServices.h"
+#include "PSaveFile.h"
 #include "StringUtils.h"
 
 #if defined Q_OS_WIN32
@@ -191,8 +191,8 @@ void ensureExists(const QDir& dir)
 void write(const QString& filename, const QByteArray& data)
 {
     ensureExists(QFileInfo(filename).dir());
-    QSaveFile file(filename);
-    if (!file.open(QSaveFile::WriteOnly)) {
+    PSaveFile file(filename);
+    if (!file.open(PSaveFile::WriteOnly)) {
         throw FileSystemException("Couldn't open " + filename + " for writing: " + file.errorString());
     }
     if (data.size() != file.write(data)) {
@@ -213,8 +213,8 @@ void appendSafe(const QString& filename, const QByteArray& data)
         buffer = QByteArray();
     }
     buffer.append(data);
-    QSaveFile file(filename);
-    if (!file.open(QSaveFile::WriteOnly)) {
+    PSaveFile file(filename);
+    if (!file.open(PSaveFile::WriteOnly)) {
         throw FileSystemException("Couldn't open " + filename + " for writing: " + file.errorString());
     }
     if (buffer.size() != file.write(buffer)) {
@@ -276,6 +276,9 @@ bool ensureFolderPathExists(const QFileInfo folderPath)
 {
     QDir dir;
     QString ensuredPath = folderPath.filePath();
+    if (folderPath.exists())
+        return true;
+
     bool success = dir.mkpath(ensuredPath);
     return success;
 }
@@ -338,7 +341,7 @@ bool copy::operator()(const QString& offset, bool dryRun)
         opt |= copy_opts::overwrite_existing;
 
     // Function that'll do the actual copying
-    auto copy_file = [&](QString src_path, QString relative_dst_path) {
+    auto copy_file = [this, dryRun, src, dst, opt, &err](QString src_path, QString relative_dst_path) {
         if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist))
             return;
 
@@ -425,7 +428,7 @@ void create_link::make_link_list(const QString& offset)
             m_recursive = true;
 
         // Function that'll do the actual linking
-        auto link_file = [&](QString src_path, QString relative_dst_path) {
+        auto link_file = [this, dst](QString src_path, QString relative_dst_path) {
             if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist)) {
                 qDebug() << "path" << relative_dst_path << "in black list or not in whitelist";
                 return;
@@ -520,7 +523,7 @@ void create_link::runPrivileged(const QString& offset)
 
     QString serverName = BuildConfig.LAUNCHER_APP_BINARY_NAME + "_filelink_server" + StringUtils::getRandomAlphaNumeric();
 
-    connect(&m_linkServer, &QLocalServer::newConnection, this, [&]() {
+    connect(&m_linkServer, &QLocalServer::newConnection, this, [this, &gotResults]() {
         qDebug() << "Client connected, sending out pairs";
         // construct block of data to send
         QByteArray block;
@@ -602,7 +605,7 @@ void create_link::runPrivileged(const QString& offset)
     }
 
     ExternalLinkFileProcess* linkFileProcess = new ExternalLinkFileProcess(serverName, m_useHardLinks, this);
-    connect(linkFileProcess, &ExternalLinkFileProcess::processExited, this, [&]() { emit finishedPrivileged(gotResults); });
+    connect(linkFileProcess, &ExternalLinkFileProcess::processExited, this, [this, gotResults]() { emit finishedPrivileged(gotResults); });
     connect(linkFileProcess, &ExternalLinkFileProcess::finished, linkFileProcess, &QObject::deleteLater);
 
     linkFileProcess->start();
@@ -647,6 +650,19 @@ void ExternalLinkFileProcess::runLinkFile()
     qDebug() << "Process exited";
 }
 
+bool moveByCopy(const QString& source, const QString& dest)
+{
+    if (!copy(source, dest)()) {  // copy
+        qDebug() << "Copy of" << source << "to" << dest << "failed!";
+        return false;
+    }
+    if (!deletePath(source)) {  // remove original
+        qDebug() << "Deletion of" << source << "failed!";
+        return false;
+    };
+    return true;
+}
+
 bool move(const QString& source, const QString& dest)
 {
     std::error_code err;
@@ -654,13 +670,14 @@ bool move(const QString& source, const QString& dest)
     ensureFilePathExists(dest);
     fs::rename(StringUtils::toStdString(source), StringUtils::toStdString(dest), err);
 
-    if (err) {
-        qWarning() << "Failed to move file:" << QString::fromStdString(err.message());
-        qDebug() << "Source file:" << source;
-        qDebug() << "Destination file:" << dest;
+    if (err.value() != 0) {
+        if (moveByCopy(source, dest))
+            return true;
+        qDebug() << "Move of" << source << "to" << dest << "failed!";
+        qWarning() << "Failed to move file:" << QString::fromStdString(err.message()) << QString::number(err.value());
+        return false;
     }
-
-    return err.value() == 0;
+    return true;
 }
 
 bool deletePath(QString path)
@@ -801,25 +818,68 @@ QString NormalizePath(QString path)
     }
 }
 
-static const QString BAD_PATH_CHARS = "\"?<>:;*|!+\r\n";
-static const QString BAD_FILENAME_CHARS = BAD_PATH_CHARS + "\\/";
+static const QString BAD_WIN_CHARS = "<>:\"|?*\r\n";
+static const QString BAD_NTFS_CHARS = "<>:\"|?*";
+static const QString BAD_HFS_CHARS = ":";
+
+static const QString BAD_FILENAME_CHARS = BAD_WIN_CHARS + "\\/";
 
 QString RemoveInvalidFilenameChars(QString string, QChar replaceWith)
 {
     for (int i = 0; i < string.length(); i++)
         if (string.at(i) < ' ' || BAD_FILENAME_CHARS.contains(string.at(i)))
             string[i] = replaceWith;
-
     return string;
 }
 
-QString RemoveInvalidPathChars(QString string, QChar replaceWith)
+QString RemoveInvalidPathChars(QString path, QChar replaceWith)
 {
-    for (int i = 0; i < string.length(); i++)
-        if (string.at(i) < ' ' || BAD_PATH_CHARS.contains(string.at(i)))
-            string[i] = replaceWith;
+    QString invalidChars;
+#ifdef Q_OS_WIN
+    invalidChars = BAD_WIN_CHARS;
+#endif
 
-    return string;
+    // the null character is ignored in this check as it was not a problem until now
+    switch (statFS(path).fsType) {
+        case FilesystemType::FAT:  // similar to NTFS
+        /* fallthrough */
+        case FilesystemType::NTFS:
+        /* fallthrough */
+        case FilesystemType::REFS:  // similar to NTFS(should be available only on windows)
+            invalidChars += BAD_NTFS_CHARS;
+            break;
+        // case FilesystemType::EXT:
+        // case FilesystemType::EXT_2_OLD:
+        // case FilesystemType::EXT_2_3_4:
+        // case FilesystemType::XFS:
+        // case FilesystemType::BTRFS:
+        // case FilesystemType::NFS:
+        // case FilesystemType::ZFS:
+        case FilesystemType::APFS:
+        /* fallthrough */
+        case FilesystemType::HFS:
+        /* fallthrough */
+        case FilesystemType::HFSPLUS:
+        /* fallthrough */
+        case FilesystemType::HFSX:
+            invalidChars += BAD_HFS_CHARS;
+            break;
+        // case FilesystemType::FUSEBLK:
+        // case FilesystemType::F2FS:
+        // case FilesystemType::UNKNOWN:
+        default:
+            break;
+    }
+
+    if (invalidChars.size() != 0) {
+        for (int i = 0; i < path.length(); i++) {
+            if (path.at(i) < ' ' || invalidChars.contains(path.at(i))) {
+                path[i] = replaceWith;
+            }
+        }
+    }
+
+    return path;
 }
 
 QString DirNameFromString(QString string, QString inDir)
@@ -860,6 +920,10 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
 {
     if (destination.isEmpty()) {
         destination = PathCombine(getDesktopDir(), RemoveInvalidFilenameChars(name));
+    }
+    if (!ensureFilePathExists(destination)) {
+        qWarning() << "Destination path can't be created!";
+        return false;
     }
 #if defined(Q_OS_MACOS)
     // Create the Application
@@ -907,8 +971,7 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
     if (!args.empty())
         argstring = " \"" + args.join("\" \"") + "\"";
 
-    stream << "#!/bin/bash"
-           << "\n";
+    stream << "#!/bin/bash" << "\n";
     stream << "\"" << target << "\" " << argstring << "\n";
 
     stream.flush();
@@ -952,12 +1015,9 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
     if (!args.empty())
         argstring = " '" + args.join("' '") + "'";
 
-    stream << "[Desktop Entry]"
-           << "\n";
-    stream << "Type=Application"
-           << "\n";
-    stream << "Categories=Game;ActionGame;AdventureGame;Simulation"
-           << "\n";
+    stream << "[Desktop Entry]" << "\n";
+    stream << "Type=Application" << "\n";
+    stream << "Categories=Game;ActionGame;AdventureGame;Simulation" << "\n";
     stream << "Exec=\"" << target.toLocal8Bit() << "\"" << argstring.toLocal8Bit() << "\n";
     stream << "Name=" << name.toLocal8Bit() << "\n";
     if (!icon.isEmpty()) {
@@ -1235,7 +1295,7 @@ bool clone::operator()(const QString& offset, bool dryRun)
     std::error_code err;
 
     // Function that'll do the actual cloneing
-    auto cloneFile = [&](QString src_path, QString relative_dst_path) {
+    auto cloneFile = [this, dryRun, dst, &err](QString src_path, QString relative_dst_path) {
         if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist))
             return;
 
@@ -1634,4 +1694,30 @@ QString getPathNameInLocal8bit(const QString& file)
 }
 #endif
 
+QString getUniqueResourceName(const QString& filePath)
+{
+    auto newFileName = filePath;
+    if (!newFileName.endsWith(".disabled")) {
+        return newFileName;  // prioritize enabled mods
+    }
+    newFileName.chop(9);
+    if (!QFile::exists(newFileName)) {
+        return filePath;
+    }
+    QFileInfo fileInfo(filePath);
+    auto baseName = fileInfo.completeBaseName();
+    auto path = fileInfo.absolutePath();
+
+    int counter = 1;
+    do {
+        if (counter == 1) {
+            newFileName = FS::PathCombine(path, baseName + ".duplicate");
+        } else {
+            newFileName = FS::PathCombine(path, baseName + ".duplicate" + QString::number(counter));
+        }
+        counter++;
+    } while (QFile::exists(newFileName));
+
+    return newFileName;
+}
 }  // namespace FS

@@ -103,8 +103,7 @@ void FlamePackExportTask::collectHashes()
     setStatus(tr("Finding file hashes..."));
     setProgress(1, 5);
     auto allMods = mcInstance->loaderModList()->allMods();
-    ConcurrentTask::Ptr hashingTask(
-        new ConcurrentTask(this, "MakeHashesTask", APPLICATION->settings()->get("NumberOfConcurrentTasks").toInt()));
+    ConcurrentTask::Ptr hashingTask(new ConcurrentTask("MakeHashesTask", APPLICATION->settings()->get("NumberOfConcurrentTasks").toInt()));
     task.reset(hashingTask);
     for (const QFileInfo& file : files) {
         const QString relative = gameRoot.relativeFilePath(file.absoluteFilePath());
@@ -116,7 +115,7 @@ void FlamePackExportTask::collectHashes()
 
         if (relative.startsWith("resourcepacks/") &&
             (relative.endsWith(".zip") || relative.endsWith(".zip.disabled"))) {  // is resourcepack
-            auto hashTask = Hashing::createFlameHasher(file.absoluteFilePath());
+            auto hashTask = Hashing::createHasher(file.absoluteFilePath(), ModPlatform::ResourceProvider::FLAME);
             connect(hashTask.get(), &Hashing::Hasher::resultsReady, [this, relative, file](QString hash) {
                 if (m_state == Task::State::Running) {
                     pendingHashes.insert(hash, { relative, file.absoluteFilePath(), relative.endsWith(".zip") });
@@ -140,7 +139,7 @@ void FlamePackExportTask::collectHashes()
                 continue;
             }
 
-            auto hashTask = Hashing::createFlameHasher(mod->fileinfo().absoluteFilePath());
+            auto hashTask = Hashing::createHasher(mod->fileinfo().absoluteFilePath(), ModPlatform::ResourceProvider::FLAME);
             connect(hashTask.get(), &Hashing::Hasher::resultsReady, [this, mod](QString hash) {
                 if (m_state == Task::State::Running) {
                     pendingHashes.insert(hash, { mod->name(), mod->fileinfo().absoluteFilePath(), mod->enabled(), true });
@@ -246,7 +245,7 @@ void FlamePackExportTask::makeApiRequest()
         pendingHashes.clear();
         getProjectsInfo();
     });
-    connect(task.get(), &NetJob::failed, this, &FlamePackExportTask::getProjectsInfo);
+    connect(task.get(), &Task::failed, this, &FlamePackExportTask::getProjectsInfo);
     task->start();
 }
 

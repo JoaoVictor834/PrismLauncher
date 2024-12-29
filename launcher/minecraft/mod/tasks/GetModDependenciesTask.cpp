@@ -23,12 +23,12 @@
 #include <memory>
 #include "Json.h"
 #include "QObjectPtr.h"
+#include "minecraft/PackProfile.h"
 #include "minecraft/mod/MetadataHandler.h"
 #include "modplatform/ModIndex.h"
 #include "modplatform/ResourceAPI.h"
 #include "modplatform/flame/FlameAPI.h"
 #include "modplatform/modrinth/ModrinthAPI.h"
-#include "tasks/ConcurrentTask.h"
 #include "tasks/SequentialTask.h"
 #include "ui/pages/modplatform/ModModel.h"
 #include "ui/pages/modplatform/flame/FlameResourceModels.h"
@@ -44,11 +44,18 @@ static ModPlatform::ModLoaderTypes mcLoaders(BaseInstance* inst)
     return static_cast<MinecraftInstance*>(inst)->getPackProfile()->getSupportedModLoaders().value();
 }
 
-GetModDependenciesTask::GetModDependenciesTask(QObject* parent,
-                                               BaseInstance* instance,
+static bool checkDependencies(std::shared_ptr<GetModDependenciesTask::PackDependency> sel,
+                              Version mcVersion,
+                              ModPlatform::ModLoaderTypes loaders)
+{
+    return (sel->pack->versions.isEmpty() || sel->version.mcVersion.contains(mcVersion.toString())) &&
+           (!loaders || !sel->version.loaders || sel->version.loaders & loaders);
+}
+
+GetModDependenciesTask::GetModDependenciesTask(BaseInstance* instance,
                                                ModFolderModel* folder,
                                                QList<std::shared_ptr<PackDependency>> selected)
-    : SequentialTask(parent, tr("Get dependencies"))
+    : SequentialTask(tr("Get dependencies"))
     , m_selected(selected)
     , m_flame_provider{ ModPlatform::ResourceProvider::FLAME, std::make_shared<ResourceDownload::FlameModModel>(*instance),
                         std::make_shared<FlameAPI>() }
@@ -68,9 +75,10 @@ GetModDependenciesTask::GetModDependenciesTask(QObject* parent,
 void GetModDependenciesTask::prepare()
 {
     for (auto sel : m_selected) {
-        for (auto dep : getDependenciesForVersion(sel->version, sel->pack->provider)) {
-            addTask(prepareDependencyTask(dep, sel->pack->provider, 20));
-        }
+        if (checkDependencies(sel, m_version, m_loaderType))
+            for (auto dep : getDependenciesForVersion(sel->version, sel->pack->provider)) {
+                addTask(prepareDependencyTask(dep, sel->pack->provider, 20));
+            }
     }
 }
 
@@ -176,7 +184,7 @@ Task::Ptr GetModDependenciesTask::prepareDependencyTask(const ModPlatform::Depen
     auto provider = providerName == m_flame_provider.name ? m_flame_provider : m_modrinth_provider;
 
     auto tasks = makeShared<SequentialTask>(
-        this, QString("DependencyInfo: %1").arg(dep.addonId.toString().isEmpty() ? dep.version : dep.addonId.toString()));
+        QString("DependencyInfo: %1").arg(dep.addonId.toString().isEmpty() ? dep.version : dep.addonId.toString()));
 
     if (!dep.addonId.toString().isEmpty()) {
         tasks->addTask(getProjectInfoTask(pDep));

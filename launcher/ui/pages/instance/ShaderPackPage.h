@@ -48,10 +48,16 @@ class ShaderPackPage : public ExternalResourcesPage {
     QString displayName() const override { return tr("Shader packs"); }
     QIcon icon() const override { return APPLICATION->getThemedIcon("shaderpacks"); }
     QString id() const override { return "shaderpacks"; }
-    QString helpPage() const override { return "Resource-packs"; }
+    QString helpPage() const override { return "shader-packs"; }
 
     bool shouldDisplay() const override { return true; }
 
    public slots:
-    void downloadShaders();
+    void downloadShaderPack();
+    void updateShaderPacks();
+    void deleteShaderPackMetadata();
+    void changeShaderPackVersion();
+
+   private:
+    std::shared_ptr<ShaderPackFolderModel> m_model;
 };

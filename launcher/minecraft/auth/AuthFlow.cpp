@@ -19,7 +19,7 @@
 
 #include <Application.h>
 
-AuthFlow::AuthFlow(AccountData* data, Action action, QObject* parent) : Task(parent), m_data(data)
+AuthFlow::AuthFlow(AccountData* data, Action action) : Task(), m_data(data)
 {
     if (data->type == AccountType::MSA) {
         if (action == Action::DeviceCode) {
@@ -59,6 +59,9 @@ void AuthFlow::executeTask()
 
 void AuthFlow::nextStep()
 {
+    if (!Task::isRunning()) {
+        return;
+    }
     if (m_steps.size() == 0) {
         // we got to the end without an incident... assume this is all.
         m_currentStep.reset();
@@ -143,4 +146,11 @@ bool AuthFlow::changeState(AccountTaskState newState, QString reason)
             return false;
         }
     }
+}
+bool AuthFlow::abort()
+{
+    emitAborted();
+    if (m_currentStep)
+        m_currentStep->abort();
+    return true;
 }

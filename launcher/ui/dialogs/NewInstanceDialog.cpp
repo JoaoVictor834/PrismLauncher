@@ -36,6 +36,7 @@
 
 #include "NewInstanceDialog.h"
 #include "Application.h"
+#include "ui/pages/modplatform/ModpackProviderBasePage.h"
 #include "ui/pages/modplatform/import_ftb/ImportFTBPage.h"
 #include "ui_NewInstanceDialog.h"
 
@@ -52,6 +53,7 @@
 #include <QFileDialog>
 #include <QLayout>
 #include <QPushButton>
+#include <QScreen>
 #include <QValidator>
 #include <utility>
 
@@ -63,6 +65,7 @@
 #include "ui/pages/modplatform/modrinth/ModrinthPage.h"
 #include "ui/pages/modplatform/technic/TechnicPage.h"
 #include "ui/widgets/PageContainer.h"
+
 NewInstanceDialog::NewInstanceDialog(const QString& initialGroup,
                                      const QString& url,
                                      const QMap<QString, QString>& extra_info,
@@ -106,16 +109,19 @@ NewInstanceDialog::NewInstanceDialog(const QString& initialGroup,
     auto OkButton = m_buttons->button(QDialogButtonBox::Ok);
     OkButton->setDefault(true);
     OkButton->setAutoDefault(true);
+    OkButton->setText(tr("OK"));
     connect(OkButton, &QPushButton::clicked, this, &NewInstanceDialog::accept);
 
     auto CancelButton = m_buttons->button(QDialogButtonBox::Cancel);
     CancelButton->setDefault(false);
     CancelButton->setAutoDefault(false);
+    CancelButton->setText(tr("Cancel"));
     connect(CancelButton, &QPushButton::clicked, this, &NewInstanceDialog::reject);
 
     auto HelpButton = m_buttons->button(QDialogButtonBox::Help);
     HelpButton->setDefault(false);
     HelpButton->setAutoDefault(false);
+    HelpButton->setText(tr("Help"));
     connect(HelpButton, &QPushButton::clicked, m_container, &PageContainer::help);
 
     if (!url.isEmpty()) {
@@ -127,7 +133,19 @@ NewInstanceDialog::NewInstanceDialog(const QString& initialGroup,
 
     updateDialogState();
 
-    restoreGeometry(QByteArray::fromBase64(APPLICATION->settings()->get("NewInstanceGeometry").toByteArray()));
+    if (APPLICATION->settings()->get("NewInstanceGeometry").isValid()) {
+        restoreGeometry(QByteArray::fromBase64(APPLICATION->settings()->get("NewInstanceGeometry").toByteArray()));
+    } else {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+        auto screen = parent->screen();
+#else
+        auto screen = QGuiApplication::primaryScreen();
+#endif
+        auto geometry = screen->availableSize();
+        resize(width(), qMin(geometry.height() - 50, 710));
+    }
+
+    connect(m_container, &PageContainer::selectedPageChanged, this, &NewInstanceDialog::selectedPageChanged);
 }
 
 void NewInstanceDialog::reject()
@@ -188,7 +206,7 @@ void NewInstanceDialog::setSuggestedPack(const QString& name, InstanceTask* task
     importVersion.clear();
 
     if (!task) {
-        ui->iconButton->setIcon(APPLICATION->icons()->getIcon("default"));
+        ui->iconButton->setIcon(APPLICATION->icons()->getIcon(InstIconKey));
         importIcon = false;
     }
 
@@ -204,7 +222,7 @@ void NewInstanceDialog::setSuggestedPack(const QString& name, QString version, I
     importVersion = std::move(version);
 
     if (!task) {
-        ui->iconButton->setIcon(APPLICATION->icons()->getIcon("default"));
+        ui->iconButton->setIcon(APPLICATION->icons()->getIcon(InstIconKey));
         importIcon = false;
     }
 
@@ -224,6 +242,9 @@ void NewInstanceDialog::setSuggestedIconFromFile(const QString& path, const QStr
 
 void NewInstanceDialog::setSuggestedIcon(const QString& key)
 {
+    if (key == "default")
+        return;
+
     auto icon = APPLICATION->icons()->getIcon(key);
     importIcon = false;
 
@@ -300,4 +321,17 @@ void NewInstanceDialog::importIconNow()
         importIcon = false;
     }
     APPLICATION->settings()->set("NewInstanceGeometry", saveGeometry().toBase64());
+}
+
+void NewInstanceDialog::selectedPageChanged(BasePage* previous, BasePage* selected)
+{
+    auto prevPage = dynamic_cast<ModpackProviderBasePage*>(previous);
+    if (prevPage) {
+        m_searchTerm = prevPage->getSerachTerm();
+    }
+
+    auto nextPage = dynamic_cast<ModpackProviderBasePage*>(selected);
+    if (nextPage) {
+        nextPage->setSearchTerm(m_searchTerm);
+    }
 }
